@@ -3,7 +3,7 @@ name: Build Graphon Native Binary
 on:
   push:
     branches: [ "main" ]
-  workflow_dispatch: # Memungkinkan kita trigger manual dari GitHub UI
+  workflow_dispatch:
 
 jobs:
   build:
@@ -20,16 +20,24 @@ jobs:
         components: 'native-image'
         github-token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Setup Groovy
+    - name: Setup Groovy (Direct Download)
       run: |
-        curl -s get.sdkman.io | bash
-        source "$HOME/.sdkman/bin/sdkman-init.sh"
-        sdk install groovy
+        # Download Groovy 4.0.18 binary zip
+        curl -sL https://groovy.jfrog.io/artifactory/dist-release-local/groovy-zips/apache-groovy-binary-4.0.18.zip -o groovy.zip
+        unzip -q groovy.zip -d $HOME
+        # Add Groovy to PATH
+        echo "$HOME/groovy-4.0.18/bin" >> $GITHUB_PATH
+
+    - name: Verify Installations
+      run: |
+        java -version
+        native-image --version
+        groovyc -version
 
     - name: Compile Groovy to JAR
       run: |
         mkdir -p classes
-        # Compile file groovy ke Java class
+        # Compile graphon.groovy ke Java class
         groovyc graphon.groovy -d classes
         # Package ke JAR
         jar cf graphon.jar -C classes .
@@ -41,8 +49,12 @@ jobs:
 
     - name: Build Native Image (Linux ARM64)
       run: |
+        # Cari lokasi groovy jar untuk classpath
+        GROOVY_JAR=$(find $HOME/groovy-4.0.18/lib -name "groovy-4.0.18.jar")
+        
         # Kompilasi ke native binary target linux-aarch64
-        native-image -jar graphon.jar graphon \
+        # Memasukkan groovy.jar ke classpath agar native-image mengenali class Groovy
+        native-image -cp "classes:$GROOVY_JAR" graphon \
           --no-fallback \
           -H:+ReportExceptionStackTraces \
           --target=linux-aarch64 \
