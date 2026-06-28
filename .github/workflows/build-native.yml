@@ -1,4 +1,4 @@
-name: Build Graphon Native Binary
+name: Build Graphon Native Binary (ARM64 via QEMU)
 
 on:
   push:
@@ -8,57 +8,46 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    
     steps:
     - uses: actions/checkout@v4
 
-    - name: Setup GraalVM
-      uses: graalvm/setup-graalvm@v1
-      with:
-        java-version: '17'
-        distribution: 'graalvm-community'
-        components: 'native-image'
-        github-token: ${{ secrets.GITHUB_TOKEN }}
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
 
-    - name: Setup Groovy (Direct Download)
+    - name: Build Native Binary in ARM64 Container
       run: |
-        # Download Groovy 4.0.18 binary zip
-        curl -sL https://groovy.jfrog.io/artifactory/dist-release-local/groovy-zips/apache-groovy-binary-4.0.18.zip -o groovy.zip
-        unzip -q groovy.zip -d $HOME
-        # Add Groovy to PATH
-        echo "$HOME/groovy-4.0.18/bin" >> $GITHUB_PATH
-
-    - name: Verify Installations
-      run: |
-        java -version
-        native-image --version
-        groovyc -version
-
-    - name: Compile Groovy to JAR
-      run: |
-        mkdir -p classes
-        # Compile graphon.groovy ke Java class
-        groovyc graphon.groovy -d classes
-        # Package ke JAR
-        jar cf graphon.jar -C classes .
-
-    - name: Install ARM64 Cross-Compiler
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-
-    - name: Build Native Image (Linux ARM64)
-      run: |
-        # Cari lokasi groovy jar untuk classpath
-        GROOVY_JAR=$(find $HOME/groovy-4.0.18/lib -name "groovy-4.0.18.jar")
+        docker run --rm -v $PWD:/work -w /work arm64v8/ubuntu:22.04 bash -c '
+        set -e
+        apt-get update
+        apt-get install -y wget unzip gcc g++ zlib1g-dev
         
-        # Kompilasi ke native binary target linux-aarch64
-        # Memasukkan groovy.jar ke classpath agar native-image mengenali class Groovy
-        native-image -cp "classes:$GROOVY_JAR" graphon \
+        echo "=== Installing GraalVM ==="
+        wget -q https://github.com/graalvm/graalvm-ce-builds/releases/download/vm-22.3.1/graalvm-ce-java17-linux-aarch64-22.3.1.tar.gz
+        tar -xzf graalvm-ce-java17-linux-aarch64-22.3.1.tar.gz -C /opt
+        export JAVA_HOME=/opt/graalvm-ce-java17-22.3.1
+        export PATH=$JAVA_HOME/bin:$PATH
+        
+        echo "=== Installing native-image ==="
+        gu install native-image
+        
+        echo "=== Installing Groovy ==="
+        wget -q https://groovy.jfrog.io/artifactory/dist-release-local/groovy-zips/apache-groovy-binary-4.0.18.zip
+        unzip -q apache-groovy-binary-4.0.18.zip -d /opt
+        export PATH=/opt/groovy-4.0.18/bin:$PATH
+        
+        echo "=== Compiling Groovy to JAR ==="
+        mkdir -p classes
+        groovyc graphon.groovy -d classes
+        jar cf graphon.jar -C classes .
+        
+        echo "=== Building Native Image ==="
+        native-image -cp "classes:/opt/groovy-4.0.18/lib/groovy-4.0.18.jar" graphon \
           --no-fallback \
-          -H:+ReportExceptionStackTraces \
-          --target=linux-aarch64 \
-          -H:NativeLinkerOption=-static
+          -H:+ReportExceptionStackTraces
+          
+        echo "=== Fixing Permissions ==="
+        chmod 777 graphon
+        '
 
     - name: Verify Binary Architecture
       run: |
