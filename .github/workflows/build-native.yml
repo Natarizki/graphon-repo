@@ -1,0 +1,60 @@
+name: Build Graphon Native Binary
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: # Memungkinkan kita trigger manual dari GitHub UI
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup GraalVM
+      uses: graalvm/setup-graalvm@v1
+      with:
+        java-version: '17'
+        distribution: 'graalvm-community'
+        components: 'native-image'
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Setup Groovy
+      run: |
+        curl -s get.sdkman.io | bash
+        source "$HOME/.sdkman/bin/sdkman-init.sh"
+        sdk install groovy
+
+    - name: Compile Groovy to JAR
+      run: |
+        mkdir -p classes
+        # Compile file groovy ke Java class
+        groovyc graphon.groovy -d classes
+        # Package ke JAR
+        jar cf graphon.jar -C classes .
+
+    - name: Install ARM64 Cross-Compiler
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+    - name: Build Native Image (Linux ARM64)
+      run: |
+        # Kompilasi ke native binary target linux-aarch64
+        native-image -jar graphon.jar graphon \
+          --no-fallback \
+          -H:+ReportExceptionStackTraces \
+          --target=linux-aarch64 \
+          -H:NativeLinkerOption=-static
+
+    - name: Verify Binary Architecture
+      run: |
+        file graphon
+        ls -lh graphon
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: graphon-linux-aarch64
+        path: graphon

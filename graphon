@@ -1,0 +1,105 @@
+#!/bin/bash
+# graphon - CLI wrapper for Graphon daemon (Gradle-like experience)
+
+PORT=9876
+DAEMON_PID_FILE=".graphon_daemon.pid"
+LOG_FILE=".graphon_daemon.log"
+
+# Function to check if daemon is running
+is_daemon_running() {
+    if [ -f "$DAEMON_PID_FILE" ]; then
+        PID=$(cat "$DAEMON_PID_FILE")
+        if kill -0 "$PID" 2>/dev/null; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# Function to start daemon in background
+start_daemon() {
+    nohup groovy graphon.groovy --daemon > "$LOG_FILE" 2>&1 &
+    echo $! > "$DAEMON_PID_FILE"
+    
+    # Wait for daemon to be ready (check if port is open)
+    echo "Waiting for daemon to start..."
+    for i in {1..20}; do
+        # Try to connect to the port
+        if echo "" | nc -w 1 -q 1 localhost $PORT > /dev/null 2>&1; then
+            echo "Daemon is ready."
+            return 0
+        fi
+        sleep 0.5
+    done
+    
+    # If we get here, daemon didn't start in time
+    echo "Warning: Daemon may not be ready. Check $LOG_FILE"
+    return 1
+}
+
+# Special daemon management commands
+case "$1" in
+    "daemon:stop")
+        if is_daemon_running; then
+            PID=$(cat "$DAEMON_PID_FILE")
+            echo "Stopping daemon (PID: $PID)..."
+            echo "shutdown" | nc -w 2 -q 1 localhost $PORT > /dev/null 2>&1
+            kill "$PID" 2>/dev/null
+            rm -f "$DAEMON_PID_FILE"
+            echo "Daemon stopped."
+        else
+            echo "Daemon not running."
+        fi
+        exit 0
+        ;;
+    "daemon:status")
+        if is_daemon_running; then
+            echo "Daemon running (PID: $(cat $DAEMON_PID_FILE))"
+        else
+            echo "Daemon not running."
+        fi
+        exit 0
+        ;;
+    "daemon:restart")
+        $0 daemon:stop
+        sleep 2
+        $0 daemon:start
+        exit 0
+        ;;
+    "daemon:start")
+        if is_daemon_running; then
+            echo "Daemon already running (PID: $(cat $DAEMON_PID_FILE))"
+            exit 0
+        fi
+        echo "Starting Graphon daemon..."
+        start_daemon
+        exit 0
+        ;;
+esac
+
+# Ensure daemon is running before sending command
+if ! is_daemon_running; then
+    echo "Starting Graphon daemon..."
+    if ! start_daemon; then
+        echo "Error: Failed to start daemon. Check $LOG_FILE"
+        # Continue anyway, maybe daemon is starting slowly
+    fi
+fi
+
+# Small delay to ensure daemon is ready
+sleep 1
+
+# Prepare command
+COMMAND="$*"
+if [ -z "$COMMAND" ]; then
+    COMMAND="default"
+fi
+
+# Send command to daemon and stream output
+echo "$COMMAND" | nc -w 60 -q 1 localhost $PORT
+
+# Check exit status
+if [ $? -ne 0 ]; then
+    echo "Error: Cannot connect to daemon. Try: ./graphon daemon:restart"
+    exit 1
+fi
