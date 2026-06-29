@@ -1,4 +1,3 @@
-```markdown
 # ⚡ Graphon Build Tool
 
 Graphon is a lightweight, fast, and generic build tool written in Groovy. Designed to run efficiently on Android (Termux) and any JVM environment (ARM64 & x86_64).
