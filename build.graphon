@@ -1,0 +1,9 @@
+project = "GraphonCore"
+
+task('hello') {
+    doLast {
+        exec "echo Hello from .graphon file!"
+    }
+}
+
+defaultTasks 'hello'

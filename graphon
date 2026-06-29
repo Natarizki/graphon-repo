@@ -1,14 +1,42 @@
 #!/bin/bash
-# graphon - CLI wrapper for Graphon daemon (Gradle-like experience)
+# graphon - Cross-Platform CLI Wrapper (Support ARM64 & x86_64)
 
 PORT=9876
 DAEMON_PID_FILE=".graphon_daemon.pid"
 LOG_FILE=".graphon_daemon.log"
 
-# Function to check if daemon is running
+# 1. DETEKSI LOKASI INSTALASI GRAPHON (~/.graphon/)
+GRAPHON_HOME="$HOME/.graphon"
+GROOVY_SCRIPT="$GRAPHON_HOME/lib/graphon.groovy"
+
+if [ ! -f "$GROOVY_SCRIPT" ]; then
+    echo "Error: Graphon engine not found in $GROOVY_SCRIPT"
+    echo "Please run the installer first: ./install.sh"
+    exit 1
+fi
+
+# 2. DETEKSI ARSITEKTUR SISTEM
+ARCH=$(uname -m)
+
+# 3. GUNAKAN CUSTOM JRE DI ~/.graphon/jre/ JIKA ADA
+JRE_DIR="$GRAPHON_HOME/jre"
+if [ -d "$JRE_DIR/bin" ]; then
+    export JAVA_HOME="$JRE_DIR"
+    export PATH="$JAVA_HOME/bin:$PATH"
+else
+    # Fallback ke Java/Groovy sistem (wajib ada di PATH)
+    if ! command -v java &> /dev/null; then
+        echo "Error: Java is not installed. Please install JDK."
+        exit 1
+    fi
+fi
+
+# 4. JVM Optimization Flags
+export JAVA_OPTS="-XX:+UseSerialGC -XX:MaxMetaspaceSize=128m -Xms16m -Xmx256m -Xshare:auto"
+
 is_daemon_running() {
-    if [ -f "$DAEMON_PID_FILE" ]; then
-        PID=$(cat "$DAEMON_PID_FILE")
+    if [ -f "$GRAPHON_HOME/$DAEMON_PID_FILE" ]; then
+        PID=$(cat "$GRAPHON_HOME/$DAEMON_PID_FILE")
         if kill -0 "$PID" 2>/dev/null; then
             return 0
         fi
@@ -16,45 +44,54 @@ is_daemon_running() {
     return 1
 }
 
-# Function to start daemon in background
 start_daemon() {
-    nohup groovy graphon.groovy --daemon > "$LOG_FILE" 2>&1 &
-    echo $! > "$DAEMON_PID_FILE"
-    
-    # Wait for daemon to be ready (check if port is open)
-    echo "Waiting for daemon to start..."
-    for i in {1..20}; do
-        # Try to connect to the port
-        if echo "" | nc -w 1 -q 1 localhost $PORT > /dev/null 2>&1; then
+    nohup groovy "$GROOVY_SCRIPT" --daemon > "$GRAPHON_HOME/$LOG_FILE" 2>&1 &
+    echo $! > "$GRAPHON_HOME/$DAEMON_PID_FILE"
+    echo "Waiting for Graphon daemon to start..."
+    for i in {1..60}; do
+        if nc -z -w 1 127.0.0.1 $PORT 2>/dev/null; then
             echo "Daemon is ready."
             return 0
         fi
         sleep 0.5
     done
-    
-    # If we get here, daemon didn't start in time
-    echo "Warning: Daemon may not be ready. Check $LOG_FILE"
     return 1
 }
 
-# Special daemon management commands
+# Tangkap perintah khusus yang bypass daemon
 case "$1" in
-    "daemon:stop")
+    "init")
+        groovy "$GROOVY_SCRIPT" "$@"
+        exit $?
+        ;;
+    "setup-android")
+        groovy "$GROOVY_SCRIPT" "$@"
+        exit $?
+        ;;
+    "--version"|"-v")
+        groovy "$GROOVY_SCRIPT" "$@"
+        exit $?
+        ;;
+    "--help"|"-h")
+        groovy "$GROOVY_SCRIPT" "$@"
+        exit $?
+        ;;
+    "daemon:stop"|"exit")
         if is_daemon_running; then
-            PID=$(cat "$DAEMON_PID_FILE")
+            PID=$(cat "$GRAPHON_HOME/$DAEMON_PID_FILE")
             echo "Stopping daemon (PID: $PID)..."
-            echo "shutdown" | nc -w 2 -q 1 localhost $PORT > /dev/null 2>&1
+            echo "cwd:$PWD task:shutdown" | nc -w 2 -q 0 127.0.0.1 $PORT > /dev/null 2>&1
             kill "$PID" 2>/dev/null
-            rm -f "$DAEMON_PID_FILE"
+            rm -f "$GRAPHON_HOME/$DAEMON_PID_FILE"
             echo "Daemon stopped."
         else
             echo "Daemon not running."
         fi
         exit 0
         ;;
-    "daemon:status")
+    "daemon:status"|"status")
         if is_daemon_running; then
-            echo "Daemon running (PID: $(cat $DAEMON_PID_FILE))"
+            echo "Daemon running (PID: $(cat $GRAPHON_HOME/$DAEMON_PID_FILE))"
         else
             echo "Daemon not running."
         fi
@@ -62,13 +99,13 @@ case "$1" in
         ;;
     "daemon:restart")
         $0 daemon:stop
-        sleep 2
+        sleep 1
         $0 daemon:start
         exit 0
         ;;
     "daemon:start")
         if is_daemon_running; then
-            echo "Daemon already running (PID: $(cat $DAEMON_PID_FILE))"
+            echo "Daemon already running."
             exit 0
         fi
         echo "Starting Graphon daemon..."
@@ -77,29 +114,20 @@ case "$1" in
         ;;
 esac
 
-# Ensure daemon is running before sending command
 if ! is_daemon_running; then
     echo "Starting Graphon daemon..."
-    if ! start_daemon; then
-        echo "Error: Failed to start daemon. Check $LOG_FILE"
-        # Continue anyway, maybe daemon is starting slowly
-    fi
+    start_daemon
 fi
 
-# Small delay to ensure daemon is ready
-sleep 1
-
-# Prepare command
 COMMAND="$*"
 if [ -z "$COMMAND" ]; then
     COMMAND="default"
 fi
 
-# Send command to daemon and stream output
-echo "$COMMAND" | nc -w 60 -q 1 localhost $PORT
+CWD="$PWD"
+echo "cwd:$CWD task:$COMMAND" | nc -w 60 127.0.0.1 $PORT
 
-# Check exit status
 if [ $? -ne 0 ]; then
-    echo "Error: Cannot connect to daemon. Try: ./graphon daemon:restart"
+    echo "Error: Cannot connect to daemon. Try: graphon daemon:restart"
     exit 1
 fi

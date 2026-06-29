@@ -1,0 +1,12 @@
+#!/bin/bash
+# graphon-cds - Ultra Fast Direct Mode (Custom JRE + CDS)
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GROOVY_JAR=$(find $PREFIX -name "groovy-*.jar" | grep -v "sources\|javadoc\|indy" | head -n 1)
+
+# Eksekusi langsung dengan Custom JRE + CDS Archive
+exec "$SCRIPT_DIR/graphon-jre/bin/java" \
+  -Xshare:on \
+  -XX:SharedArchiveFile="$SCRIPT_DIR/cds/graphon.jsa" \
+  -cp "$SCRIPT_DIR/graphon.jar:$GROOVY_JAR" \
+  graphon "$@"
