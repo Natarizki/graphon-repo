@@ -1,88 +1,74 @@
 #!/bin/bash
-# graphon - Cross-Platform CLI Wrapper (Support ARM64 & x86_64)
+# graphon - CLI wrapper with Unix Domain Socket & Memory Optimization
 
-PORT=9876
-DAEMON_PID_FILE=".graphon_daemon.pid"
-LOG_FILE=".graphon_daemon.log"
-
-# 1. DETEKSI LOKASI INSTALASI GRAPHON (~/.graphon/)
 GRAPHON_HOME="$HOME/.graphon"
 GROOVY_SCRIPT="$GRAPHON_HOME/lib/graphon.groovy"
+SOCKET_FILE="$GRAPHON_HOME/daemon.sock"
+DAEMON_PID_FILE="$GRAPHON_HOME/daemon.pid"
+LOG_FILE="$GRAPHON_HOME/daemon.log"
 
 if [ ! -f "$GROOVY_SCRIPT" ]; then
     echo "Error: Graphon engine not found in $GROOVY_SCRIPT"
-    echo "Please run the installer first: ./install.sh"
     exit 1
 fi
 
-# 2. DETEKSI ARSITEKTUR SISTEM
 ARCH=$(uname -m)
-
-# 3. GUNAKAN CUSTOM JRE DI ~/.graphon/jre/ JIKA ADA
 JRE_DIR="$GRAPHON_HOME/jre"
 if [ -d "$JRE_DIR/bin" ]; then
     export JAVA_HOME="$JRE_DIR"
     export PATH="$JAVA_HOME/bin:$PATH"
 else
-    # Fallback ke Java/Groovy sistem (wajib ada di PATH)
     if ! command -v java &> /dev/null; then
         echo "Error: Java is not installed. Please install JDK."
         exit 1
     fi
 fi
 
-# 4. JVM Optimization Flags
 export JAVA_OPTS="-XX:+UseSerialGC -XX:MaxMetaspaceSize=128m -Xms16m -Xmx256m -Xshare:auto"
 
 is_daemon_running() {
-    if [ -f "$GRAPHON_HOME/$DAEMON_PID_FILE" ]; then
-        PID=$(cat "$GRAPHON_HOME/$DAEMON_PID_FILE")
+    if [ -f "$DAEMON_PID_FILE" ]; then
+        PID=$(cat "$DAEMON_PID_FILE")
         if kill -0 "$PID" 2>/dev/null; then
-            return 0
+            if [ -S "$SOCKET_FILE" ]; then
+                return 0
+            fi
         fi
+    fi
+    if [ -f "$DAEMON_PID_FILE" ]; then
+        kill $(cat "$DAEMON_PID_FILE") 2>/dev/null
+        rm -f "$DAEMON_PID_FILE"
     fi
     return 1
 }
 
 start_daemon() {
-    nohup groovy "$GROOVY_SCRIPT" --daemon > "$GRAPHON_HOME/$LOG_FILE" 2>&1 &
-    echo $! > "$GRAPHON_HOME/$DAEMON_PID_FILE"
+    nohup groovy "$GROOVY_SCRIPT" --daemon > "$LOG_FILE" 2>&1 &
+    echo $! > "$DAEMON_PID_FILE"
     echo "Waiting for Graphon daemon to start..."
-    for i in {1..60}; do
-        if nc -z -w 1 127.0.0.1 $PORT 2>/dev/null; then
+    for i in {1..30}; do
+        if [ -S "$SOCKET_FILE" ]; then
             echo "Daemon is ready."
             return 0
         fi
         sleep 0.5
     done
+    echo "Error: Daemon failed to start. Check $LOG_FILE"
     return 1
 }
 
-# Tangkap perintah khusus yang bypass daemon
 case "$1" in
-    "init")
-        groovy "$GROOVY_SCRIPT" "$@"
-        exit $?
-        ;;
-    "setup-android")
-        groovy "$GROOVY_SCRIPT" "$@"
-        exit $?
-        ;;
-    "--version"|"-v")
-        groovy "$GROOVY_SCRIPT" "$@"
-        exit $?
-        ;;
-    "--help"|"-h")
+    "init"|"setup-android"|"--version"|"-v"|"--help"|"-h")
         groovy "$GROOVY_SCRIPT" "$@"
         exit $?
         ;;
     "daemon:stop"|"exit")
         if is_daemon_running; then
-            PID=$(cat "$GRAPHON_HOME/$DAEMON_PID_FILE")
+            PID=$(cat "$DAEMON_PID_FILE")
             echo "Stopping daemon (PID: $PID)..."
-            echo "cwd:$PWD task:shutdown" | nc -w 2 -q 0 127.0.0.1 $PORT > /dev/null 2>&1
+            echo "cwd:$PWD task:shutdown" | nc -U -w 2 "$SOCKET_FILE" 2>/dev/null
             kill "$PID" 2>/dev/null
-            rm -f "$GRAPHON_HOME/$DAEMON_PID_FILE"
+            rm -f "$DAEMON_PID_FILE" "$SOCKET_FILE"
             echo "Daemon stopped."
         else
             echo "Daemon not running."
@@ -91,7 +77,7 @@ case "$1" in
         ;;
     "daemon:status"|"status")
         if is_daemon_running; then
-            echo "Daemon running (PID: $(cat $GRAPHON_HOME/$DAEMON_PID_FILE))"
+            echo "Daemon running (PID: $(cat $DAEMON_PID_FILE))"
         else
             echo "Daemon not running."
         fi
@@ -125,7 +111,10 @@ if [ -z "$COMMAND" ]; then
 fi
 
 CWD="$PWD"
-echo "cwd:$CWD task:$COMMAND" | nc -w 60 127.0.0.1 $PORT
+
+# PERBAIKAN: Hapus -q 1 agar netcat tidak nunggu 1 detik.
+# Daemon akan otomatis nutup koneksi setelah ngirim "END_OF_OUTPUT", jadi netcat bakal langsung exit.
+echo "cwd:$CWD task:$COMMAND" | nc -U -w 60 "$SOCKET_FILE"
 
 if [ $? -ne 0 ]; then
     echo "Error: Cannot connect to daemon. Try: graphon daemon:restart"

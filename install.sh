@@ -1,11 +1,23 @@
 #!/bin/bash
-# Graphon Installer v2.0 - Clean Installation
+# Graphon Installer v2.1 - Clean Installation & Daemon Cleanup
 
 INSTALL_DIR="$HOME/.graphon"
 BIN_DIR="$HOME/.local/bin"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "Installing Graphon to $INSTALL_DIR..."
+
+# 0. Stop existing daemon if running (to prevent zombie socket conflicts)
+if [ -f "$INSTALL_DIR/daemon.pid" ]; then
+    PID=$(cat "$INSTALL_DIR/daemon.pid")
+    if kill -0 "$PID" 2>/dev/null; then
+        echo "Stopping existing daemon (PID: $PID)..."
+        kill "$PID" 2>/dev/null
+        sleep 1
+    fi
+    # Clean up old socket and pid files
+    rm -f "$INSTALL_DIR/daemon.pid" "$INSTALL_DIR/daemon.sock"
+fi
 
 # 1. Buat struktur folder
 mkdir -p "$INSTALL_DIR/bin"
@@ -14,7 +26,7 @@ mkdir -p "$INSTALL_DIR/jre"
 mkdir -p "$INSTALL_DIR/plugins"
 mkdir -p "$BIN_DIR"
 
-# 2. Copy file inti
+# 2. Copy file inti (Overwrite existing)
 cp "$SCRIPT_DIR/graphon.groovy" "$INSTALL_DIR/lib/graphon.groovy"
 cp "$SCRIPT_DIR/graphon" "$INSTALL_DIR/bin/graphon"
 
